@@ -1,0 +1,808 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Realistic Inside a Black Hole Simulation</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      colors: {
+        void: '#020408',
+        panel: 'rgba(8, 12, 20, 0.85)',
+        ember: '#ff9a3c',
+        ice: '#a8d4ff',
+        ink: '#f0f4f8',
+        dim: '#94a3b8'
+      },
+      fontFamily: {
+        sans: ['Inter', 'sans-serif'],
+        mono: ['JetBrains Mono', 'monospace']
+      }
+    }
+  }
+}
+</script>
+<style>
+body { background: #020408; color: #f0f4f8; font-family: 'Inter', sans-serif; overflow: hidden; height: 100vh; margin: 0; }
+canvas#gl { position: fixed; inset: 0; width: 100%; height: 100%; touch-action: none; cursor: grab; }
+canvas#gl:active { cursor: grabbing; }
+.glass { background: rgba(8, 12, 20, 0.82); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border: 1px solid rgba(255, 255, 255, 0.08); }
+.glow-ember { text-shadow: 0 0 20px rgba(255, 154, 60, 0.4); }
+.glow-ice { text-shadow: 0 0 20px rgba(168, 212, 255, 0.4); }
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: rgba(0,0,0,0.2); }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,154,60,0.4); }
+input[type=range] { accent-color: #ff9a3c; }
+@keyframes pulseGlow { 0%, 100% { opacity: 0.4; } 50% { opacity: 0.8; } }
+.animate-pulse-glow { animation: pulseGlow 3s ease-in-out infinite; }
+</style>
+</head>
+<body class="relative select-none">
+
+<!-- WebGL Canvas -->
+<canvas id="gl"></canvas>
+
+<!-- Floating Toggle Button for Sidebar -->
+<button id="btn-toggle-sidebar" class="fixed top-4 right-4 z-30 p-3 glass rounded-2xl border border-white/20 text-ink hover:text-amber-400 hover:border-amber-500/50 transition-all duration-300 shadow-2xl flex items-center gap-2 group cursor-pointer" title="Toggle Sidebar">
+  <svg id="icon-toggle" class="w-5 h-5 transition-transform duration-300 group-hover:scale-110" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+  </svg>
+  <span class="text-xs font-mono font-medium hidden sm:inline text-dim group-hover:text-amber-300">Controls</span>
+</button>
+
+<!-- HUD Telemetry Panel -->
+<div id="hud" class="fixed left-4 bottom-4 w-80 glass rounded-2xl p-4 z-20 font-mono text-xs shadow-2xl transition-all duration-300">
+  <div class="flex items-center justify-between pb-3 border-b border-white/10 mb-3">
+    <div class="flex items-center space-x-2">
+      <span class="w-2.5 h-2.5 rounded-full bg-amber-500 animate-ping" id="status-dot"></span>
+      <span id="reg-title" class="font-bold tracking-wider text-amber-400 uppercase text-[11px]">EXTERIOR FAR FIELD</span>
+    </div>
+    <span id="speed-badge" class="px-2 py-0.5 rounded bg-white/5 text-dim text-[10px]">0.00c</span>
+  </div>
+
+  <div class="space-y-2">
+    <div class="flex justify-between items-center"><span class="text-dim">Radial Distance (r):</span><span id="d-dist" class="font-semibold text-ink">14.00 Rs</span></div>
+    <div class="flex justify-between items-center"><span class="text-dim">Proper Time (τ):</span><span id="d-time" class="font-semibold text-ice">0.00 s</span></div>
+    <div class="flex justify-between items-center"><span class="text-dim">Time Dilation (dt/dτ):</span><span id="d-dil" class="font-semibold text-ink">1.08x</span></div>
+    <div class="flex justify-between items-center"><span class="text-dim">Sky Redshift (1+z):</span><span id="d-z" class="font-semibold text-ink">1.05</span></div>
+    <div class="flex justify-between items-center"><span class="text-dim">Tidal Force (Δa / 2m):</span><span id="d-tidal" class="font-semibold text-amber-400">0.02 g</span></div>
+  </div>
+
+  <div class="mt-4 pt-3 border-t border-white/10">
+    <p id="hud-desc" class="text-[11px] font-sans text-dim italic leading-relaxed">Gravity is weak here, yet background stars already bend into gravitational arcs around the shadow.</p>
+  </div>
+</div>
+
+<!-- Singularity Reached Modal -->
+<div id="end-modal" class="fixed inset-0 bg-black/90 backdrop-blur-md z-50 hidden flex items-center justify-center p-4">
+  <div class="glass max-w-lg w-full p-8 rounded-3xl border border-amber-500/30 text-center shadow-2xl space-y-6">
+    <div class="w-16 h-16 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center mx-auto text-amber-400 text-2xl font-bold">✧</div>
+    <div class="space-y-2">
+      <h2 class="text-2xl font-bold text-ink">Singularity Reached (r = 0)</h2>
+      <p class="text-sm text-dim leading-relaxed">Spacetime curvature diverges infinitely. All timelike trajectories terminate here in a gravitational singularity. General relativity yields to quantum gravity.</p>
+    </div>
+    <button id="btn-restart" class="w-full py-3 px-6 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 text-black font-semibold tracking-wide hover:opacity-95 transition shadow-lg shadow-amber-500/20 cursor-pointer">Initiate New Descent</button>
+  </div>
+</div>
+
+<!-- Main Control Panel & Sidebar -->
+<aside id="panel" class="fixed top-0 right-0 bottom-0 w-full sm:w-[440px] glass flex flex-col z-20 shadow-2xl transition-transform duration-500 ease-in-out translate-x-0">
+  <header class="p-6 pb-4 border-b border-white/10 flex items-start justify-between">
+    <div>
+      <h1 class="text-xl font-bold tracking-tight text-ink flex items-center gap-2">
+        <span>Inside a Black Hole</span>
+        <span class="text-xs px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 font-mono font-normal">360° VR</span>
+      </h1>
+      <p class="text-xs text-dim mt-1">Real-time ray-traced Schwarzschild metric simulation with inside-horizon projection.</p>
+    </div>
+    <button id="btn-close-panel" class="text-dim hover:text-white p-2 rounded-lg hover:bg-white/10 transition cursor-pointer" title="Close Panel">
+      <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+      </svg>
+    </button>
+  </header>
+
+  <!-- Quick Actions Bar -->
+  <div class="p-4 bg-white/[0.02] border-b border-white/10 flex items-center gap-3">
+    <button id="btn-fall" class="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 text-black font-bold text-sm tracking-wide hover:opacity-95 transition shadow-lg shadow-amber-500/20 flex items-center justify-center gap-2 cursor-pointer">
+      <span>▶</span> <span id="fall-lbl">Fall in</span>
+    </button>
+    <button id="btn-reset" class="py-3 px-5 rounded-xl bg-white/5 border border-white/10 text-ink text-sm font-medium hover:bg-white/10 transition cursor-pointer">Reset</button>
+  </div>
+
+  <!-- Interactive Sliders Panel -->
+  <div class="p-4 border-b border-white/10 space-y-3.5 bg-black/20 text-xs">
+    <div>
+      <div class="flex justify-between items-center mb-1">
+        <label class="text-dim uppercase tracking-wider font-semibold">Black Hole Scale & Type</label>
+        <select id="sel-mass" class="bg-white/5 border border-white/10 rounded-lg px-2 py-1 text-xs text-ink focus:outline-none focus:border-amber-500 transition cursor-pointer">
+          <option value="0.000003003">Earth-Mass Black Hole (M = 1 M⊕, r = 8.87 mm)</option>
+          <option value="10">Stellar-Mass (M = 10 M☉, r = 29.5 km)</option>
+          <option value="150">Intermediate GW190521 (M = 150 M☉, r = 442 km)</option>
+          <option value="4300000" selected>Sagittarius A* (M = 4.3M M☉, r = 12.7M km)</option>
+          <option value="6500000000">M87* Supermassive (M = 6.5B M☉, r = 19.2B km)</option>
+          <option value="100000000000">Phoenix A* Ultramassive (M = 100B M☉, r = 295B km)</option>
+        </select>
+      </div>
+      <div class="flex justify-between text-[11px] text-amber-300 font-mono mt-1">
+        <span>Horizon Diameter:</span>
+        <span id="val-bh-size">25.4 Million km (0.17 AU)</span>
+      </div>
+    </div>
+
+    <div>
+      <div class="flex justify-between items-center mb-1">
+        <label class="text-dim uppercase tracking-wider">Visual Scale Ratio vs Earth</label>
+        <span id="val-scale" class="font-mono font-semibold text-amber-400">1.0x</span>
+      </div>
+      <input type="range" id="rng-scale" min="0.2" max="5.0" step="0.1" value="1.0" class="w-full cursor-pointer">
+    </div>
+
+    <div>
+      <div class="flex justify-between items-center mb-1">
+        <label class="text-dim uppercase tracking-wider">Radial Distance (r/Rs)</label>
+        <span id="val-dist" class="font-mono font-semibold text-amber-400">14.00</span>
+      </div>
+      <input type="range" id="rng-dist" min="-1.3" max="1.6" step="0.005" value="1.15" class="w-full cursor-pointer">
+    </div>
+
+    <div>
+      <div class="flex justify-between items-center mb-1">
+        <label class="text-dim uppercase tracking-wider">Descent Velocity Speed</label>
+        <span id="val-speed" class="font-mono font-semibold text-amber-400">1.0x</span>
+      </div>
+      <input type="range" id="rng-speed" min="0.2" max="3.0" step="0.1" value="1.0" class="w-full cursor-pointer">
+    </div>
+
+    <div>
+      <div class="flex justify-between items-center mb-1">
+        <label class="text-dim uppercase tracking-wider">Accretion Disk Luminosity</label>
+        <span id="val-lum" class="font-mono font-semibold text-amber-400">1.0x</span>
+      </div>
+      <input type="range" id="rng-lum" min="0.2" max="2.5" step="0.1" value="1.0" class="w-full cursor-pointer">
+    </div>
+
+    <div>
+      <div class="flex justify-between items-center mb-1">
+        <label class="text-dim uppercase tracking-wider">Camera FOV / Zoom</label>
+        <span id="val-fov" class="font-mono font-semibold text-amber-400">75°</span>
+      </div>
+      <input type="range" id="rng-fov" min="40" max="110" step="1" value="75" class="w-full cursor-pointer">
+    </div>
+  </div>
+
+  <!-- Visual Toggles -->
+  <div class="px-4 py-3 border-b border-white/10 flex flex-wrap gap-4 text-xs text-dim">
+    <label class="flex items-center gap-2 cursor-pointer hover:text-white transition"><input type="checkbox" id="chk-disk" checked class="rounded bg-white/10 border-white/20 accent-amber-500">Accretion Disk</label>
+    <label class="flex items-center gap-2 cursor-pointer hover:text-white transition"><input type="checkbox" id="chk-lens" checked class="rounded bg-white/10 border-white/20 accent-amber-500">Spacetime Bending</label>
+    <label class="flex items-center gap-2 cursor-pointer hover:text-white transition"><input type="checkbox" id="chk-gal" checked class="rounded bg-white/10 border-white/20 accent-amber-500">Galaxy Backdrop</label>
+    <label class="flex items-center gap-2 cursor-pointer hover:text-white transition"><input type="checkbox" id="chk-beam" checked class="rounded bg-white/10 border-white/20 accent-amber-500">Doppler Beaming</label>
+    <label class="flex items-center gap-2 cursor-pointer hover:text-white transition text-amber-300 font-semibold"><input type="checkbox" id="chk-earth" class="rounded bg-white/10 border-white/20 accent-amber-500">🌍 Show Earth</label>
+  </div>
+
+  <!-- Navigation Tabs -->
+  <div class="flex border-b border-white/10 bg-black/40" role="tablist">
+    <button role="tab" aria-selected="true" data-t="sec-anatomy" class="tab-btn flex-1 py-3 text-xs font-medium text-amber-400 border-b-2 border-amber-500 transition cursor-pointer">Anatomy</button>
+    <button role="tab" aria-selected="false" data-t="sec-earth" class="tab-btn flex-1 py-3 text-xs font-medium text-dim hover:text-white border-b-2 border-transparent transition cursor-pointer">Earth vs BH</button>
+    <button role="tab" aria-selected="false" data-t="sec-falling" class="tab-btn flex-1 py-3 text-xs font-medium text-dim hover:text-white border-b-2 border-transparent transition cursor-pointer">Free-Fall</button>
+    <button role="tab" aria-selected="false" data-t="sec-inside" class="tab-btn flex-1 py-3 text-xs font-medium text-dim hover:text-white border-b-2 border-transparent transition cursor-pointer">Inside</button>
+    <button role="tab" aria-selected="false" data-t="sec-singularity" class="tab-btn flex-1 py-3 text-xs font-medium text-dim hover:text-white border-b-2 border-transparent transition cursor-pointer">Singularity</button>
+  </div>
+
+  <!-- Tab Contents -->
+  <div id="tab-body" class="flex-1 overflow-y-auto p-6 space-y-5 text-sm text-dim leading-relaxed">
+    <section id="sec-anatomy" class="tab-sec space-y-4">
+      <h3 class="text-base font-semibold text-ink">The Schwarzschild Horizon (r = 1 Rs)</h3>
+      <p>The boundary of no return. The radius is given by <code class="text-xs bg-white/5 px-1.5 py-0.5 rounded text-amber-300 font-mono">Rs = 2GM/c²</code> (~2.95 km per solar mass). Crossing this threshold requires exceeding light speed in classical spacetime.</p>
+      <h3 class="text-base font-semibold text-ink">Photon Sphere & Lensing</h3>
+      <p>At <code class="text-xs bg-white/5 px-1.5 py-0.5 rounded text-amber-300 font-mono">1.5 Rs</code>, photons orbit in unstable circular paths, forming the razor-sharp photon ring. Spacetime curvature wraps the accretion disk's rear view over and under the dark event horizon shadow.</p>
+      <h3 class="text-base font-semibold text-ink">Doppler Beaming</h3>
+      <p>Material swirling in the inner accretion disk approaches speeds near <code class="text-xs bg-white/5 px-1.5 py-0.5 rounded text-amber-300 font-mono">0.5c</code>. The approaching side is intensely blue-shifted and super-brightened, while the receding side is dimmed and redshifted.</p>
+    </section>
+
+    <section id="sec-earth" class="tab-sec space-y-4 hidden">
+      <h3 class="text-base font-semibold text-ink">Scale Comparison: Earth & Black Holes</h3>
+      <div class="p-3 bg-white/5 rounded-xl border border-white/10 space-y-2 text-xs font-mono">
+        <div class="flex justify-between"><span class="text-dim">Earth Mass:</span><span class="text-ice">5.97 × 10²⁴ kg</span></div>
+        <div class="flex justify-between"><span class="text-dim">Earth Schwarzschild Radius:</span><span class="text-amber-400">8.87 mm (~0.35 in)</span></div>
+        <div class="flex justify-between"><span class="text-dim">10-Sun Black Hole Radius:</span><span class="text-ink">29.5 km</span></div>
+        <div class="flex justify-between"><span class="text-dim">Sagittarius A* Radius:</span><span class="text-ink">12.7 million km</span></div>
+      </div>
+
+      <h3 class="text-base font-semibold text-ink">What if Earth Became a Black Hole?</h3>
+      <p>If Earth were compressed into a black hole without losing mass, its event horizon would be smaller than a <b>coin or marble</b> (~1.77 cm diameter). Moon's orbit would remain completely unaffected because total gravitational mass remains identical at distance!</p>
+
+      <h3 class="text-base font-semibold text-ink">Supermassive Scale Contrast</h3>
+      <p>Compared to Sagittarius A* (4.3 million solar masses), Earth is dwarfed completely. If Sagittarius A* were the size of a basketball, Earth's radius would be invisible even under a high-power microscope.</p>
+    </section>
+
+    <section id="sec-falling" class="tab-sec space-y-4 hidden">
+      <h3 class="text-base font-semibold text-ink">Relativistic Free-Fall Dynamics</h3>
+      <p>When you initiate free-fall, the simulation calculates exact radial geodesic trajectories. As you plunge toward the horizon, relativistic aberration bunches background starlight into an intense, brilliant forward aperture.</p>
+      <h3 class="text-base font-semibold text-ink">The Two Perspectives</h3>
+      <p><b>Distant Observer:</b> Due to extreme gravitational time dilation, your clock appears to freeze as you approach the horizon. Your light redshifts and dims until you fade from view.</p>
+      <p><b>Your Perspective:</b> Your proper clock ticks normally. You cross the horizon in finite proper time without physical barrier or sudden jolt.</p>
+    </section>
+
+    <section id="sec-inside" class="tab-sec space-y-4 hidden">
+      <h3 class="text-base font-semibold text-ink">Space and Time Swap Roles</h3>
+      <p>Inside the event horizon (<code class="text-xs bg-white/5 px-1.5 py-0.5 rounded text-amber-300 font-mono">r &lt; 1 Rs</code>), the metric components of radius <code class="text-xs bg-white/5 px-1.5 py-0.5 rounded text-amber-300 font-mono">r</code> and time <code class="text-xs bg-white/5 px-1.5 py-0.5 rounded text-amber-300 font-mono">t</code> invert. Moving toward smaller <code class="text-xs bg-white/5 px-1.5 py-0.5 rounded text-amber-300 font-mono">r</code> becomes as inevitable and unidirectional as moving forward in time.</p>
+      <h3 class="text-base font-semibold text-ink">The Compressed Universe</h3>
+      <p>Looking back upward toward the horizon, light from the exterior universe is squeezed into a shrinking, intensely bright circular aperture overhead. Looking forward toward the singularity reveals total, consuming darkness.</p>
+    </section>
+
+    <section id="sec-singularity" class="tab-sec space-y-4 hidden">
+      <h3 class="text-base font-semibold text-ink">The Gravitational Singularity (r = 0)</h3>
+      <p>At the core lies infinite curvature density where classical physics collapses. Tidal gravitational forces (spaghettification) stretch matter infinitely along radial lines while crushing it transversely.</p>
+      <h3 class="text-base font-semibold text-ink">Cosmic Censorship</h3>
+      <p>General relativity posits that all singularities are safely cloaked behind event horizons, preventing naked singularities from disrupting causal determinism in the observable universe.</p>
+    </section>
+  </div>
+</aside>
+
+<script>
+// --- WEBGL REAL-TIME RAY TRACER FOR BLACK HOLE SIMULATION ---
+const canvas = document.getElementById('gl');
+const gl = canvas.getContext('webgl', { antialias: false, powerPreference: 'high-performance' });
+
+if (!gl) {
+  alert('WebGL is not supported in this browser.');
+}
+
+const vertexShaderSource = `
+  attribute vec2 a_pos;
+  void main() {
+    gl_Position = vec4(a_pos, 0.0, 1.0);
+  }
+`;
+
+const fragmentShaderSource = `
+precision highp float;
+uniform vec2 u_res;
+uniform float u_time;
+uniform float u_disk;
+uniform float u_lens;
+uniform float u_gal;
+uniform float u_beam;
+uniform float u_beta;
+uniform float u_lum;
+uniform float u_fov;
+uniform float u_earth;
+uniform float u_scale;
+uniform vec3 u_cp;
+uniform vec3 u_cr;
+uniform vec3 u_cu;
+uniform vec3 u_cf;
+
+float hash(vec3 p) {
+  return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.545);
+}
+float hash2(vec2 p) {
+  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.545);
+}
+float noise2(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash2(i), hash2(i + vec2(1.0, 0.0)), f.x),
+             mix(hash2(i + vec2(0.0, 1.0)), hash2(i + vec2(1.0, 1.0)), f.x), f.y);
+}
+
+// Ultra-Realistic 3D Earth Renderer with Rayleigh Atmosphere & City Lights
+vec4 raytraceEarth(vec3 ro, vec3 rd) {
+  vec3 eCenter = vec3(7.5, 1.2, 2.5);
+  float eRadius = 1.25 / u_scale;
+  vec3 oc = ro - eCenter;
+  float b = dot(oc, rd);
+  float c = dot(oc, oc) - eRadius * eRadius;
+  float h = b * b - c;
+  if (h < 0.0) return vec4(0.0);
+
+  float t = -b - sqrt(h);
+  if (t < 0.0) return vec4(0.0);
+
+  vec3 hitPos = ro + rd * t;
+  vec3 norm = normalize(hitPos - eCenter);
+
+  // Earth Spin Rotation
+  float rot = u_time * 0.12;
+  mat2 rotM = mat2(cos(rot), -sin(rot), sin(rot), cos(rot));
+  vec3 rNorm = norm;
+  rNorm.xz = rotM * rNorm.xz;
+
+  // Multi-frequency Fractal Terrain Noise
+  float n1 = noise2(rNorm.xy * 3.5 + vec2(rNorm.z * 2.5));
+  float n2 = noise2(rNorm.xz * 8.0) * 0.5;
+  float n3 = noise2(rNorm.yz * 16.0) * 0.25;
+  float cont = (n1 + n2 + n3) / 1.75;
+
+  vec3 oceanDeep = vec3(0.01, 0.08, 0.32);
+  vec3 oceanShallow = vec3(0.04, 0.32, 0.55);
+  vec3 landVegetation = vec3(0.08, 0.38, 0.12);
+  vec3 landDesert = vec3(0.62, 0.52, 0.32);
+  vec3 iceCaps = vec3(0.92, 0.96, 1.0);
+
+  float isLand = smoothstep(0.47, 0.52, cont);
+  float isDesert = smoothstep(0.55, 0.70, noise2(rNorm.zx * 6.0));
+  float isIce = smoothstep(0.62, 0.88, abs(rNorm.y));
+
+  vec3 surface = mix(mix(oceanDeep, oceanShallow, smoothstep(0.35, 0.47, cont)),
+                     mix(landVegetation, landDesert, isDesert), isLand);
+  surface = mix(surface, iceCaps, isIce);
+
+  // Dynamic Cloud Layers & Shadow Offset
+  vec2 cloudUV = rNorm.xz * 6.0 + vec2(u_time * 0.02, u_time * 0.01);
+  float cloudDensity = noise2(cloudUV) * noise2(rNorm.xy * 12.0 - vec2(u_time * 0.015));
+  cloudDensity = smoothstep(0.38, 0.75, cloudDensity);
+
+  // Sun Vector & Lighting Calculations
+  vec3 sunDir = normalize(vec3(1.2, 0.5, 0.9));
+  float NdotL = dot(norm, sunDir);
+  float diff = max(NdotL, 0.0);
+
+  // Night-side City Lights
+  float nightFactor = smoothstep(0.1, -0.2, NdotL);
+  float cityNoise = noise2(rNorm.xy * 25.0) * noise2(rNorm.yz * 30.0);
+  vec3 cityLights = vec3(1.0, 0.75, 0.3) * smoothstep(0.58, 0.75, cityNoise) * isLand * (1.0 - isIce) * nightFactor * 3.0;
+
+  // Fresnel Specular Reflection on Ocean
+  vec3 viewDir = -rd;
+  vec3 halfVec = normalize(sunDir + viewDir);
+  float fresnel = pow(1.0 - max(dot(viewDir, norm), 0.0), 5.0);
+  float spec = pow(max(dot(norm, halfVec), 0.0), 32.0) * (1.0 - isLand) * (1.0 - cloudDensity) * (0.2 + 0.8 * fresnel);
+
+  // Cloud Shadow on Surface
+  float shadow = 1.0 - cloudDensity * 0.45 * smoothstep(0.0, 0.3, NdotL);
+  vec3 litSurface = (surface * diff * shadow + vec3(spec) * 0.9) + cityLights;
+
+  // Clouds Lighting
+  vec3 cloudColor = vec3(0.98, 0.98, 1.0) * (max(NdotL, 0.05) + 0.15);
+  vec3 finalSurface = mix(litSurface, cloudColor, cloudDensity * (1.0 - isIce * 0.4));
+
+  // Rayleigh Atmosphere Rim Scattering
+  float rim = 1.0 - max(dot(viewDir, norm), 0.0);
+  vec3 atmosphere = vec3(0.25, 0.55, 1.0) * pow(rim, 3.5) * 2.2 * max(NdotL + 0.2, 0.0);
+
+  return vec4(finalSurface + atmosphere, 1.0);
+}
+
+vec3 blackbody(float t) {
+  vec3 c = vec3(smoothstep(0.0, 0.5, t), smoothstep(0.1, 1.0, t), smoothstep(0.5, 1.6, t));
+  return c * vec3(1.0, 0.92, 0.85) + vec3(0.0, 0.0, max(t - 1.2, 0.0) * 0.3);
+}
+
+vec3 getSky(vec3 d) {
+  vec3 c = vec3(0.0);
+  for(int i = 0; i < 3; i++) {
+    float s = 45.0 + float(i) * 70.0;
+    vec3 q = d * s, id = floor(q), f = fract(q) - 0.5;
+    float r = hash(id + float(i) * 7.0);
+    vec3 o = (vec3(hash(id + 1.3), hash(id + 2.7), hash(id + 4.1)) - 0.5) * 0.6;
+    float m = smoothstep(0.16, 0.0, length(f - o)) * step(0.93 + 0.02 * float(i), r);
+    c += m * (0.15 + 2.5 * pow(hash(id + 5.0), 5.0)) * mix(vec3(1.0, 0.7, 0.45), vec3(0.6, 0.78, 1.0), hash(id + 9.0));
+  }
+  if(u_gal > 0.5) {
+    vec3 N = normalize(vec3(0.35, 0.8, 0.45));
+    float b = dot(d, N), band = exp(-b * b * 30.0);
+    float nz = noise2(vec2(d.x * 6.0 + d.z * 4.0, d.y * 6.0 + d.z * 2.0)) * 0.6 + noise2(vec2(d.x * 14.0, d.y * 14.0 + d.z * 9.0)) * 0.4;
+    float bl = pow(max(dot(d, normalize(vec3(0.7, -0.1, -0.7))), 0.0), 12.0);
+    float dust = 1.0 - 0.75 * smoothstep(0.45, 0.7, noise2(vec2(d.x * 9.0 + d.z * 5.0, d.y * 9.0 - d.z * 3.0)) * 0.7 + noise2(vec2(d.x * 25.0, d.y * 25.0 + d.z * 17.0)) * 0.3) * exp(-b * b * 180.0);
+    float cl = step(0.8, hash(floor(d * 420.0))) * band * (0.3 + nz);
+    c += (band * (0.1 + 0.5 * nz) * mix(vec3(0.5, 0.6, 1.0), vec3(1.0, 0.8, 0.55), bl) + band * bl * vec3(1.0, 0.8, 0.5) * 0.6) * dust + cl * 0.35 * dust * vec3(1.0, 0.9, 0.8) + vec3(0.5, 0.15, 0.2) * pow(noise2(vec2(d.x * 3.0 + d.z * 2.0, d.y * 3.0 - d.z)), 3.0) * 0.06;
+  }
+  return c;
+}
+
+void main() {
+  vec2 uv = (gl_FragCoord.xy - 0.5 * u_res) / u_res.y;
+  float fovScale = tan(radians(u_fov) * 0.5);
+  vec3 d = normalize(u_cf * fovScale * 2.0 + u_cr * uv.x + u_cu * uv.y);
+  vec3 p = u_cp;
+  vec3 col = vec3(0.0);
+  float r0 = length(p);
+
+  if (r0 < 1.0) {
+      vec3 ax = p / r0;
+      float ang = acos(clamp(dot(d, ax), -1.0, 1.0));
+      float th = 1.5708 * sqrt(r0) + 0.03;
+      if (ang < th) {
+        vec3 pe = normalize(d - ax * dot(d, ax) + 1e-5);
+        vec3 sd = ax * cos(ang / th * 3.14159) + pe * sin(ang / th * 3.14159);
+        col = getSky(sd) * vec3(0.7, 0.9, 1.4) * (1.0 + 4.0 * (1.0 - r0)) * smoothstep(th, th * 0.85, ang) + vec3(0.3, 0.5, 1.0) * 0.12 * (1.0 - r0) * smoothstep(th, th * 0.85, ang);
+      }
+      col += vec3(0.25, 0.4, 1.0) * exp(-pow((ang - th) * 9.0, 2.0)) * 0.5 * sqrt(r0);
+  } else {
+    vec3 v = d;
+    float dop = 1.0;
+    if (u_beta > 0.0) {
+      float cc = dot(d, u_cf), cs = (cc - u_beta) / (1.0 - u_beta * cc);
+      v = normalize(u_cf * cs + normalize(d - u_cf * cc + 1e-6) * sqrt(max(1.0 - cs * cs, 0.0)));
+      dop = sqrt(1.0 - u_beta * u_beta) / (1.0 - u_beta * cc);
+    }
+
+    // Optional Realistic Procedural Earth Rendering
+    if (u_earth > 0.5) {
+      vec4 earthRes = raytraceEarth(p, v);
+      if (earthRes.a > 0.0) {
+        col += earthRes.rgb;
+      }
+    }
+
+    float h2l = dot(cross(p, v), cross(p, v));
+    float tr = 1.0;
+    bool esc = false;
+
+    for (int i = 0; i < 240; i++) {
+      float r = length(p);
+      if (r < 1.0) break;
+      if (r > 75.0 && dot(p, v) > 0.0) {
+        esc = true;
+        break;
+      }
+      float dt = clamp(0.045 * r, 0.025, 1.5);
+      vec3 pn = p + v * dt;
+      float rx = length(pn.xz);
+      float hh = 0.09 * rx + 0.05;
+
+      if (u_disk > 0.5 && rx > 3.0 && rx < 16.0) {
+        float rotVol = u_time * 0.4 * pow(3.0 / rx, 1.2);
+        float cVol = cos(rotVol), sVol = sin(rotVol);
+        vec2 rotatedXZ = vec2(cVol * pn.x - sVol * pn.z, sVol * pn.x + cVol * pn.z);
+        float volNoise = noise2(vec2(rx * 4.0 + rotatedXZ.x * 0.5, rotatedXZ.y * 0.5 - u_time * 0.2));
+        col += tr * blackbody(1.15 * pow(3.0 / rx, 0.75)) * exp(-pn.y * pn.y / (hh * hh)) * dt * 0.08 / (1.0 + 0.3 * rx) * u_lum * (0.8 + 0.4 * volNoise);
+      }
+
+      if (u_disk > 0.5 && p.y * pn.y < 0.0) {
+        vec3 q = mix(p, pn, p.y / (p.y - pn.y));
+        float rd = length(q);
+        if (rd > 3.0 && rd < 16.0) {
+          float om = pow(rd, -1.5) * u_time * 1.8;
+          float ca = cos(om), sa = sin(om);
+          vec2 w = vec2(ca * q.x - sa * q.z, sa * q.x + ca * q.z);
+          float an = atan(w.y, w.x), c2 = cos(an), s2 = sin(an);
+          float nz = noise2(vec2(rd * 7.0 + u_time * 0.2, c2 * 3.0 + s2 * 2.0)) * 0.5 + noise2(vec2(rd * 19.0 - u_time * 0.5, s2 * 5.0 - c2 * 4.0)) * 0.3 + noise2(vec2(rd * 47.0, c2 * 9.0 + s2 * 7.0)) * 0.2;
+          float rings = 0.55 + 0.45 * sin(rd * 23.0 + nz * 6.0 - u_time * 1.2);
+          float Td = pow(3.0 / rd, 0.75) * pow(max(1.0 - sqrt(2.9 / rd), 0.0), 0.25) * 1.9;
+          float vb = sqrt(0.5 / (rd - 1.0));
+          float gam = 1.0 / sqrt(1.0 - vb * vb);
+          vec3 tg = normalize(vec3(-q.z, 0.0, q.x));
+          float g = 1.0 / (gam * (1.0 + vb * dot(tg, v))) * sqrt(1.0 - 1.0 / rd);
+          if (u_beam < 0.5) g = 1.0;
+          vec3 em = blackbody(Td * g) * pow(g, 4.0) * rings * 1.6 * u_lum;
+          float op = smoothstep(16.0, 11.0, rd) * smoothstep(3.0, 3.3, rd) * clamp(nz * 1.4 + 0.2, 0.0, 0.9);
+          col += tr * em * op * dop * dop;
+          tr *= (1.0 - op);
+        }
+      }
+
+      if (u_lens > 0.5) {
+        v = normalize(v - 1.5 * h2l * pn / pow(dot(pn, pn), 2.5) * dt);
+      }
+      p = pn;
+    }
+    if (esc) col += tr * getSky(v) * dop * dop * vec3(inversesqrt(dop), 1.0, sqrt(dop));
+  }
+
+  col = 1.0 - exp(-col * 1.3);
+  col = pow(col, vec3(0.45));
+  col *= 1.0 - 0.35 * dot(uv, uv);
+  col += (hash2(gl_FragCoord.xy + u_time) - 0.5) * 0.015;
+  gl_FragColor = vec4(col, 1.0);
+}
+`;
+
+function createShader(gl, type, source) {
+  const shader = gl.createShader(type);
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+    console.error(gl.getShaderInfoLog(shader));
+    gl.deleteShader(shader);
+    return null;
+  }
+  return shader;
+}
+
+const vertexShader = createShader(gl, gl.VERTEX_SHADER, vertexShaderSource);
+const fragmentShader = createShader(gl, gl.FRAGMENT_SHADER, fragmentShaderSource);
+
+const program = gl.createProgram();
+gl.attachShader(program, vertexShader);
+gl.attachShader(program, fragmentShader);
+gl.linkProgram(program);
+gl.useProgram(program);
+
+const buffer = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+
+const posLoc = gl.getAttribLocation(program, 'a_pos');
+gl.enableVertexAttribArray(posLoc);
+gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+
+const uniforms = {};
+['u_res', 'u_time', 'u_disk', 'u_lens', 'u_gal', 'u_beam', 'u_beta', 'u_lum', 'u_fov', 'u_earth', 'u_scale', 'u_cp', 'u_cr', 'u_cu', 'u_cf'].forEach(k => {
+  uniforms[k] = gl.getUniformLocation(program, k);
+});
+
+// Simulation State
+const state = {
+  yaw: 0.6,
+  pitch: 0.2,
+  r: 14.0,
+  r0: 14.0,
+  fall: false,
+  tau: 0.0,
+  beta: 0.0,
+  speedMult: 1.0,
+  lumMult: 1.0,
+  fov: 75.0,
+  scaleRatio: 1.0,
+  sidebarOpen: true
+};
+
+function formatMassRadiusDisplay(solarMasses) {
+  const rsKm = solarMasses * 2.95;
+  const diamKm = rsKm * 2;
+  if (diamKm < 0.001) {
+    return `${(diamKm * 1000).toFixed(2)} mm`;
+  } else if (diamKm < 1000) {
+    return `${diamKm.toFixed(2)} km`;
+  } else if (diamKm < 149597870) {
+    return `${(diamKm / 1e6).toFixed(2)} Million km`;
+  } else {
+    return `${(diamKm / 149597870).toFixed(2)} AU`;
+  }
+}
+
+const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const norm = a => { const l = Math.hypot(...a); return a.map(x => x / l); };
+
+function resizeCanvas() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+  canvas.width = Math.floor(window.innerWidth * dpr);
+  canvas.height = Math.floor(window.innerHeight * dpr);
+}
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
+
+// Pointer Controls for 360 Camera Look
+let isDragging = false;
+let previousPointerPosition = { x: 0, y: 0 };
+
+canvas.addEventListener('pointerdown', e => {
+  isDragging = true;
+  previousPointerPosition = { x: e.clientX, y: e.clientY };
+  canvas.setPointerCapture(e.pointerId);
+});
+
+canvas.addEventListener('pointermove', e => {
+  if (!isDragging) return;
+  const deltaX = e.clientX - previousPointerPosition.x;
+  const deltaY = e.clientY - previousPointerPosition.y;
+  state.yaw -= deltaX * 0.005;
+  state.pitch = Math.max(-1.45, Math.min(1.45, state.pitch + deltaY * 0.005));
+  previousPointerPosition = { x: e.clientX, y: e.clientY };
+});
+
+canvas.addEventListener('pointerup', e => {
+  isDragging = false;
+  try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
+});
+
+canvas.addEventListener('wheel', e => {
+  if (state.fall) return;
+  state.r = Math.max(0.04, Math.min(50.0, state.r * Math.exp(e.deltaY * 0.001)));
+  document.getElementById('rng-dist').value = Math.log10(state.r);
+  document.getElementById('val-dist').textContent = state.r.toFixed(2);
+  e.preventDefault();
+}, { passive: false });
+
+function updateTelemetry() {
+  const r = state.r;
+  const speedC = state.beta;
+  const solarMasses = parseFloat(document.getElementById('sel-mass').value);
+  const massKg = solarMasses * 1.989e30;
+  const rsMeters = solarMasses * 2950;
+  const rMeters = r * rsMeters;
+  const tidalAccelG = (2 * 6.67430e-11 * massKg * 2.0 / Math.pow(Math.max(rMeters, 10), 3)) / 9.80665;
+
+  document.getElementById('d-dist').textContent = `${r.toFixed(2)} Rs`;
+  document.getElementById('d-time').textContent = `${(state.tau * (rsMeters / 3e8)).toFixed(3)} s`;
+  document.getElementById('d-dil').textContent = r > 1.0 ? `${(1.0 / Math.sqrt(1.0 - 1.0 / r)).toFixed(2)}x` : '∞ (Inverted)';
+  document.getElementById('d-z').textContent = r > 1.0 ? `${(1.0 / Math.sqrt(1.0 - 1.0 / r)).toFixed(2)}` : '∞';
+  document.getElementById('speed-badge').textContent = `${speedC.toFixed(2)}c`;
+
+  let tidalStr = '0.00 g';
+  if (tidalAccelG > 1e6) tidalStr = `${tidalAccelG.toExponential(2)} g`;
+  else if (tidalAccelG > 1) tidalStr = `${tidalAccelG.toFixed(1)} g`;
+  else tidalStr = `${tidalAccelG.toFixed(3)} g`;
+  document.getElementById('d-tidal').textContent = tidalStr;
+
+  const regTitle = document.getElementById('reg-title');
+  const hudDesc = document.getElementById('hud-desc');
+  const statusDot = document.getElementById('status-dot');
+
+  if (r > 12.0) {
+    regTitle.textContent = 'EXTERIOR FAR FIELD';
+    hudDesc.textContent = 'Gravity is weak here, yet background stars already bend into gravitational arcs around the shadow.';
+    statusDot.className = 'w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping';
+  } else if (r > 3.0) {
+    regTitle.textContent = 'ACCRETION DISK REGION';
+    hudDesc.textContent = 'Gas orbits at up to half light speed. Approaching disk matter is Doppler boosted brighter and bluer.';
+    statusDot.className = 'w-2.5 h-2.5 rounded-full bg-amber-500 animate-ping';
+  } else if (r > 1.5) {
+    regTitle.textContent = 'UNSTABLE ORBIT / ISCO';
+    hudDesc.textContent = 'Below 3 Rs, no stable orbits exist. Infalling plasma accelerates rapidly toward the photon ring.';
+    statusDot.className = 'w-2.5 h-2.5 rounded-full bg-orange-500 animate-ping';
+  } else if (r > 1.0) {
+    regTitle.textContent = 'PHOTON SPHERE BOUNDARY';
+    hudDesc.textContent = 'Light orbits in unstable circles at 1.5 Rs. The black shadow fills most of your forward field of vision.';
+    statusDot.className = 'w-2.5 h-2.5 rounded-full bg-red-500 animate-ping';
+  } else if (r > 0.05) {
+    regTitle.textContent = 'INSIDE EVENT HORIZON';
+    hudDesc.textContent = 'Every future path leads inward to r = 0. Outside starlight shrinks into a bright overhead aperture.';
+    statusDot.className = 'w-2.5 h-2.5 rounded-full bg-purple-500 animate-ping';
+  } else {
+    regTitle.textContent = 'SINGULARITY CORE';
+    hudDesc.textContent = 'Classical spacetime terminates. Curvature diverges infinitely.';
+    statusDot.className = 'w-2.5 h-2.5 rounded-full bg-white animate-ping';
+  }
+}
+
+function renderLoop(time) {
+  requestAnimationFrame(renderLoop);
+  const sec = time / 1000;
+  const dt = Math.min(0.05, sec - (renderLoop.lastTime || sec));
+  renderLoop.lastTime = sec;
+
+  if (state.fall) {
+    const k = Math.max(0.1, Math.min(3.0, 0.5 * state.r)) * state.speedMult;
+    const du = dt * k;
+    state.tau += du;
+    state.r -= Math.sqrt(Math.max(1.0 / state.r - 1.0 / state.r0, 0.03)) * du;
+    state.beta = state.r > 1.02 ? Math.min(0.98, Math.sqrt(Math.max(0.0, 1.0 - (1.0 - 1.0 / state.r) / (1.0 - 1.0 / state.r0)))) : 0.98;
+
+    document.getElementById('rng-dist').value = Math.log10(Math.max(state.r, 0.04));
+    document.getElementById('val-dist').textContent = state.r.toFixed(2);
+
+    if (state.r <= 0.04) {
+      state.r = 0.04;
+      state.fall = false;
+      document.getElementById('fall-lbl').textContent = 'Fall in';
+      document.getElementById('end-modal').classList.remove('hidden');
+    }
+  }
+
+  const r = state.r;
+  const cy = Math.cos(state.pitch);
+  const cp = [r * cy * Math.sin(state.yaw), r * Math.sin(state.pitch), r * cy * Math.cos(state.yaw)];
+  const cf = cp.map(x => -x / r);
+  const cr = norm(cross(cf, [0, 1, 0]));
+  const cu = cross(cr, cf);
+
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.uniform2f(uniforms.u_res, canvas.width, canvas.height);
+  gl.uniform1f(uniforms.u_time, sec);
+  gl.uniform1f(uniforms.u_disk, document.getElementById('chk-disk').checked ? 1 : 0);
+  gl.uniform1f(uniforms.u_lens, document.getElementById('chk-lens').checked ? 1 : 0);
+  gl.uniform1f(uniforms.u_gal, document.getElementById('chk-gal').checked ? 1 : 0);
+  gl.uniform1f(uniforms.u_beam, document.getElementById('chk-beam').checked ? 1 : 0);
+  gl.uniform1f(uniforms.u_earth, document.getElementById('chk-earth').checked ? 1 : 0);
+  gl.uniform1f(uniforms.u_scale, state.scaleRatio);
+  gl.uniform1f(uniforms.u_beta, state.beta);
+  gl.uniform1f(uniforms.u_lum, state.lumMult);
+  gl.uniform1f(uniforms.u_fov, state.fov);
+
+  gl.uniform3fv(uniforms.u_cp, cp);
+  gl.uniform3fv(uniforms.u_cr, cr);
+  gl.uniform3fv(uniforms.u_cu, cu);
+  gl.uniform3fv(uniforms.u_cf, cf);
+
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  updateTelemetry();
+}
+
+// UI Controls & Event Listeners
+const panel = document.getElementById('panel');
+const btnToggleSidebar = document.getElementById('btn-toggle-sidebar');
+const btnClosePanel = document.getElementById('btn-close-panel');
+
+function toggleSidebar() {
+  state.sidebarOpen = !state.sidebarOpen;
+  if (state.sidebarOpen) {
+    panel.classList.remove('translate-x-full');
+  } else {
+    panel.classList.add('translate-x-full');
+  }
+}
+
+btnToggleSidebar.addEventListener('click', toggleSidebar);
+btnClosePanel.addEventListener('click', toggleSidebar);
+
+function resetState() {
+  state.fall = false;
+  state.tau = 0;
+  state.beta = 0;
+  state.r = 14.0;
+  state.r0 = 14.0;
+  document.getElementById('rng-dist').value = Math.log10(14.0);
+  document.getElementById('val-dist').textContent = '14.00';
+  document.getElementById('fall-lbl').textContent = 'Fall in';
+  document.getElementById('end-modal').classList.add('hidden');
+}
+
+document.getElementById('btn-fall').addEventListener('click', () => {
+  if (state.fall) {
+    state.fall = false;
+    document.getElementById('fall-lbl').textContent = 'Resume';
+    return;
+  }
+  if (state.r <= 0.05) resetState();
+  state.r0 = Math.max(state.r, 2.0);
+  state.fall = true;
+  document.getElementById('fall-lbl').textContent = 'Pause';
+});
+
+document.getElementById('btn-reset').addEventListener('click', resetState);
+document.getElementById('btn-restart').addEventListener('click', resetState);
+
+document.getElementById('rng-dist').addEventListener('input', e => {
+  state.fall = false;
+  state.beta = 0;
+  document.getElementById('fall-lbl').textContent = 'Fall in';
+  state.r = Math.pow(10, parseFloat(e.target.value));
+  state.r0 = Math.max(state.r, 2.0);
+  document.getElementById('val-dist').textContent = state.r.toFixed(2);
+});
+
+document.getElementById('rng-speed').addEventListener('input', e => {
+  state.speedMult = parseFloat(e.target.value);
+  document.getElementById('val-speed').textContent = `${state.speedMult.toFixed(1)}x`;
+});
+
+document.getElementById('rng-lum').addEventListener('input', e => {
+  state.lumMult = parseFloat(e.target.value);
+  document.getElementById('val-lum').textContent = `${state.lumMult.toFixed(1)}x`;
+});
+
+document.getElementById('rng-fov').addEventListener('input', e => {
+  state.fov = parseFloat(e.target.value);
+  document.getElementById('val-fov').textContent = `${state.fov}°`;
+});
+
+document.getElementById('sel-mass').addEventListener('change', e => {
+  const solarMasses = parseFloat(e.target.value);
+  document.getElementById('val-bh-size').textContent = formatMassRadiusDisplay(solarMasses);
+});
+
+document.getElementById('rng-scale').addEventListener('input', e => {
+  state.scaleRatio = parseFloat(e.target.value);
+  document.getElementById('val-scale').textContent = `${state.scaleRatio.toFixed(1)}x`;
+});
+
+// Tab Switching System
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => {
+      b.setAttribute('aria-selected', 'false');
+      b.className = 'tab-btn flex-1 py-3 text-xs font-medium text-dim hover:text-white border-b-2 border-transparent transition cursor-pointer';
+    });
+    btn.setAttribute('aria-selected', 'true');
+    btn.className = 'tab-btn flex-1 py-3 text-xs font-medium text-amber-400 border-b-2 border-amber-500 transition cursor-pointer';
+
+    document.querySelectorAll('.tab-sec').forEach(sec => sec.classList.add('hidden'));
+    const targetId = btn.getAttribute('data-t');
+    document.getElementById(targetId).classList.remove('hidden');
+  });
+});
+
+// Start Animation Loop
+requestAnimationFrame(renderLoop);
+</script>
+</body>
+</html>
